@@ -17,6 +17,18 @@ builder.Services.AddAutoMapper(cfg => {
     cfg.AddProfile<MappingProfile>();
 }, typeof(Program));
 
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("FrontendPolicy", policy =>
+        policy.WithOrigins("http://localhost:5173", "http://localhost:4173", "http://localhost:3000")
+            .AllowAnyMethod()
+            .AllowAnyHeader()
+            .AllowCredentials());
+
+    options.AddPolicy("AllowAll", policy =>
+        policy.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader());
+});
+
 DbSession.ConnectionString = builder.Configuration.GetConnectionString("DefaultConnection")!;
 
 var jwtKey = builder.Configuration["Jwt:Key"]!;
@@ -46,6 +58,7 @@ if (app.Environment.IsDevelopment())
 
 app.UseMiddleware<ExceptionMiddleware>();
 app.UseHttpsRedirection();
+app.UseCors(app.Environment.IsDevelopment() ? "AllowAll" : "FrontendPolicy");
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();

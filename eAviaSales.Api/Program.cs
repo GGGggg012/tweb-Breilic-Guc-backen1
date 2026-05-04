@@ -3,6 +3,10 @@ using eAviaSales.BusinessLayer.Mapping;
 using eAviaSales.DataAccess;
 using eAviaSales.DataAccess.Context;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Storage;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using System.Text;
@@ -17,6 +21,9 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddAutoMapper(cfg => {
     cfg.AddProfile<MappingProfile>();
 }, typeof(Program));
+
+// РљРѕРЅС‚СЂРѕР»Р»РµСЂС‹ СЃРѕР·РґР°СЋС‚ BusinessLogic РІСЂСѓС‡РЅСѓСЋ (С„Р°Р±СЂРёРєР° flows).
+// IMapper Рё IConfiguration РёРЅР¶РµРєС‚СЏС‚СЃСЏ С‡РµСЂРµР· РІСЃС‚СЂРѕРµРЅРЅС‹Р№ DI.
 
 builder.Services.AddSwaggerGen(c =>
 {
@@ -67,7 +74,8 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidateIssuer = true,
             ValidIssuer = builder.Configuration["Jwt:Issuer"],
             ValidateAudience = true,
-            ValidAudience = builder.Configuration["Jwt:Audience"]
+            ValidAudience = builder.Configuration["Jwt:Audience"],
+            RoleClaimType = System.Security.Claims.ClaimTypes.Role
         };
     });
 
@@ -88,11 +96,56 @@ app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
 
-using (var scope = app.Services.CreateScope())
-{
-    new UserContext().Database.EnsureCreated();
-    new ProductContext().Database.EnsureCreated();
-    new OrderContext().Database.EnsureCreated();
-}
+EnsureDatabase();
 
 app.Run();
+
+void EnsureDatabase()
+{
+    using var u = new UserContext();
+    using var p = new ProductContext();
+    using var o = new OrderContext();
+
+    if (u.Database.GetMigrations().Any())
+    {
+        u.Database.Migrate();
+        p.Database.Migrate();
+        o.Database.Migrate();
+        EnsureProductsIsActiveColumn(p);
+        return;
+    }
+
+    u.Database.EnsureCreated();
+
+    EnsureTablesFor(p);
+    EnsureTablesFor(o);
+    EnsureProductsIsActiveColumn(p);
+}
+
+void EnsureProductsIsActiveColumn(ProductContext productCtx)
+{
+    try
+    {
+        productCtx.Database.ExecuteSqlRaw("""
+            IF COL_LENGTH('Products', 'IsActive') IS NULL
+                ALTER TABLE Products ADD IsActive bit NOT NULL CONSTRAINT DF_Products_IsActive DEFAULT 1;
+            """);
+    }
+    catch
+    {
+        /* СѓР¶Рµ РµСЃС‚СЊ РєРѕР»РѕРЅРєР° РёР»Рё С‚Р°Р±Р»РёС†Р° СЃ РґСЂСѓРіРёРј РёРјРµРЅРµРј вЂ” Р»РѕРєР°Р»СЊРЅРѕ РјРѕР¶РЅРѕ РґРѕР±Р°РІРёС‚СЊ РІСЂСѓС‡РЅСѓСЋ */
+    }
+}
+
+void EnsureTablesFor(DbContext ctx)
+{
+    var creator = (IRelationalDatabaseCreator)ctx.GetService<IDatabaseCreator>();
+
+    var script = creator.GenerateCreateScript();
+    foreach (var stmt in script.Split(new[] { ";\r\n", ";\n", ";" }, StringSplitOptions.RemoveEmptyEntries))
+    {
+        var sql = stmt.Trim();
+        if (string.IsNullOrEmpty(sql) || sql.Equals("GO", StringComparison.OrdinalIgnoreCase)) continue;
+        try { ctx.Database.ExecuteSqlRaw(sql); } catch { }
+    }
+}
